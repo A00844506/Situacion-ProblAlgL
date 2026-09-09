@@ -1,0 +1,162 @@
+import csv
+
+def leer_csv(ruta):
+    """Lee el CSV y devuelve (nombres, X, indicadores) con X como lista de listas."""
+    nombres = []
+    X = []
+    with open(ruta, newline="", encoding="utf-8") as f:
+        reader = csv.reader(f)
+        header = next(reader)
+        indicadores = header[1:]
+        for fila in reader:
+            nombres.append(fila[0])
+            X.append([float(v) for v in fila[1:]])
+    return nombres, X, indicadores
+
+
+def medias_columnas(X):
+    """Calcula el promedio de cada columna (indicador)."""
+    n = len(X)
+    p = len(X[0])
+    medias = [0.0] * p
+    for fila in X:
+        for j in range(p):
+            medias[j] += fila[j]
+    for j in range(p):
+        medias[j] /= n
+    return medias
+
+
+def centrar_matriz(X, medias):
+    """Resta a cada columna su media (sin normalizar la escala)."""
+    n = len(X)
+    p = len(X[0])
+    return [[X[i][j] - medias[j] for j in range(p)] for i in range(n)]
+
+
+def transponer(M):
+    filas, columnas = len(M), len(M[0])
+    return [[M[i][j] for i in range(filas)] for j in range(columnas)]
+
+
+def multiplicar_matrices(A, B):
+    """Multiplicación clásica de matrices A (m x k) por B (k x n)."""
+    m, k = len(A), len(A[0])
+    n = len(B[0])
+    R = [[0.0] * n for _ in range(m)]
+    for i in range(m):
+        for j in range(n):
+            suma = 0.0
+            for t in range(k):
+                suma += A[i][t] * B[t][j]
+            R[i][j] = suma
+    return R
+
+
+def escalar_por_matriz(c, M):
+    return [[c * val for val in fila] for fila in M]
+
+
+def restar_matrices(A, B):
+    filas, columnas = len(A), len(A[0])
+    return [[A[i][j] - B[i][j] for j in range(columnas)] for i in range(filas)]
+
+
+def matriz_covarianza(Xc, n):
+    """S = (1 / (n - 1)) * Xc^T * Xc"""
+    XcT = transponer(Xc)
+    producto = multiplicar_matrices(XcT, Xc)
+    return escalar_por_matriz(1.0 / (n - 1), producto)
+
+
+def producto_punto(u, v):
+    return sum(ui * vi for ui, vi in zip(u, v))
+
+
+def norma(v):
+    return producto_punto(v, v) ** 0.5
+
+
+def normalizar(v):
+    nv = norma(v)
+    return [vi / nv for vi in v]
+
+
+def matriz_por_vector(M, v):
+    return [producto_punto(fila, v) for fila in M]
+
+
+def producto_externo(u, v):
+    """u * v^T -> matriz p x p"""
+    return [[ui * vj for vj in v] for ui in u]
+def potencia_iterada(S, tol=1e-12, max_iter=10000):
+    p = len(S)
+    v = normalizar([1.0] * p)  # vector inicial arbitrario (no nulo)
+    lambda_anterior = 0.0
+
+    for _ in range(max_iter):
+        Sv = matriz_por_vector(S, v)
+        v_nuevo = normalizar(Sv)
+        lambda_actual = producto_punto(v_nuevo, matriz_por_vector(S, v_nuevo))
+
+        if abs(lambda_actual - lambda_anterior) < tol:
+            v = v_nuevo
+            break
+        v = v_nuevo
+        lambda_anterior = lambda_actual
+
+    lam = producto_punto(v, matriz_por_vector(S, v))
+    return lam, v
+
+
+def fijar_signo(v):
+    """Convencion: la entrada de mayor magnitud del vector propio es positiva."""
+    idx_max = max(range(len(v)), key=lambda i: abs(v[i]))
+    return [-vi for vi in v] if v[idx_max] < 0 else v
+
+
+def descomposicion_espectral(S):
+    """Obtiene TODOS los valores y vectores propios de S (p x p simetrica)
+    mediante potencia iterada + deflacion sucesiva."""
+    p = len(S)
+    S_actual = [fila[:] for fila in S]
+    eigvals, eigvecs = [], []
+
+    for _ in range(p):
+        lam, v = potencia_iterada(S_actual)
+        v = fijar_signo(v)
+        eigvals.append(lam)
+        eigvecs.append(v)
+
+        vvT = producto_externo(v, v)
+        S_actual = restar_matrices(S_actual, escalar_por_matriz(lam, vvT))
+
+    return eigvals, eigvecs
+nombres, X, indicadores = leer_csv("datos_PCA_30_empleados_5_indicadores.csv")
+n, p = len(X), len(X[0])
+
+# 1) Medias y centrado (sin normalizar escala)
+medias = medias_columnas(X)
+Xc = centrar_matriz(X, medias)
+
+# 2) Matriz de varianzas y covarianzas S
+S = matriz_covarianza(Xc, n)
+
+# 3) Valores y vectores propios (potencia iterada + deflacion)
+eigvals, eigvecs = descomposicion_espectral(S)
+
+# 4) PC1: mayor valor propio y su vector propio asociado
+lambda1, v1 = eigvals[0], eigvecs[0]
+varianza_total = sum(S[i][i] for i in range(p))       # traza de S
+proporciones = [lam / varianza_total for lam in eigvals]
+
+# 5) Puntuaciones de cada empleado sobre PC1 y ranking
+scores_pc1 = [producto_punto(fila, v1) for fila in Xc]
+orden = sorted(range(n), key=lambda i: scores_pc1[i], reverse=True)
+
+for pos, idx in enumerate(orden, start=1):
+    print(f"{pos:2d}. {nombres[idx]}  ->  score = {scores_pc1[idx]:.3f}")
+
+# 6) Error de representacion al usar solo PC1
+error_relativo = 1 - proporciones[0]
+print(f"Error de representacion: {error_relativo*100:.2f}%")
